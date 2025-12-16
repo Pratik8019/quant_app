@@ -103,7 +103,7 @@ if file:
 
     if pd.isna(beta):
         st.warning("Hedge ratio unstable due to limited data.")
-        spread = a - a.mean()  # fallback spread
+        spread = a - a.mean()
         mode = "fallback"
 
     # -------- Adaptive Rolling Window --------
@@ -147,7 +147,8 @@ if file:
         "📊 Z-Score",
         "🔗 Correlation",
         "🧪 ADF Test",
-        "💰 Backtest"
+        "💰 Backtest",
+        "📥 Data Export"
     ])
 
     # -------- Prices --------
@@ -216,3 +217,45 @@ if file:
                 px.line(pnl, title="Cumulative Strategy PnL"),
                 use_container_width=True
             )
+
+    # -------- Data Export --------
+    with tabs[7]:
+        st.markdown("### 📥 Download Analytics as CSV")
+
+        st.download_button(
+            "⬇️ Download Spread",
+            spread.to_csv().encode("utf-8"),
+            file_name="spread.csv",
+            mime="text/csv"
+        )
+
+        if not z.dropna().empty:
+            st.download_button(
+                "⬇️ Download Z-Score",
+                z.to_csv().encode("utf-8"),
+                file_name="zscore.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("Z-score not available for this timeframe.")
+
+        if not corr.dropna().empty:
+            st.download_button(
+                "⬇️ Download Correlation",
+                corr.to_csv().encode("utf-8"),
+                file_name="correlation.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("Correlation not available for this timeframe.")
+
+        if not z.dropna().empty:
+            pnl = (mean_reversion_backtest(z).shift(1) * spread).cumsum()
+            st.download_button(
+                "⬇️ Download Backtest PnL",
+                pnl.to_csv().encode("utf-8"),
+                file_name="backtest_pnl.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("Backtest not available for this timeframe.")
