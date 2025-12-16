@@ -54,21 +54,20 @@ if file:
     st.markdown("## 📊 Quant Trading Analytics Dashboard")
     st.caption(
         "Statistical pair analysis with hedge ratios, spreads, z-scores, "
-        "and stationarity diagnostics"
+        "correlations, stationarity diagnostics, and alerts"
     )
 
     # -------- Symbol Selection --------
-    with st.container():
-        st.markdown("### 🔀 Symbol Selection")
-        col_sym1, col_sym2 = st.columns(2)
-        with col_sym1:
-            symbol_a = st.selectbox("Symbol A", df.symbol.unique())
-        with col_sym2:
-            symbol_b = st.selectbox("Symbol B", df.symbol.unique())
+    st.markdown("### 🔀 Symbol Selection")
+    col_sym1, col_sym2 = st.columns(2)
+    with col_sym1:
+        symbol_a = st.selectbox("Symbol A", df.symbol.unique())
+    with col_sym2:
+        symbol_b = st.selectbox("Symbol B", df.symbol.unique())
 
-        if symbol_a == symbol_b:
-            st.warning("Please select two different symbols.")
-            st.stop()
+    if symbol_a == symbol_b:
+        st.warning("Please select two different symbols.")
+        st.stop()
 
     df_a = df[df.symbol == symbol_a]
     df_b = df[df.symbol == symbol_b]
@@ -76,6 +75,10 @@ if file:
     # -------- Resampling --------
     ohlc_a = resample_ticks(df_a, timeframe)
     ohlc_b = resample_ticks(df_b, timeframe)
+
+    if ohlc_a.empty or ohlc_b.empty:
+        st.error("No OHLC data available for selected timeframe.")
+        st.stop()
 
     # -------- Normalize Prices --------
     a = ohlc_a["close"] / ohlc_a["close"].iloc[0]
@@ -88,6 +91,7 @@ if file:
 
     use_returns = len(ret) >= 5
 
+    # -------- Hedge & Spread --------
     if use_returns:
         beta, mode = safe_hedge_ratio(ret["a"], ret["b"])
         spread = ret["a"] - beta * ret["b"]
@@ -98,33 +102,44 @@ if file:
         base_a, base_b = a, b
 
     if pd.isna(beta):
-        st.error("Hedge ratio cannot be estimated for this dataset.")
-        st.stop()
+        st.warning("Hedge ratio unstable due to limited data.")
+        spread = a - a.mean()  # fallback spread
+        mode = "fallback"
 
-    z = zscore(spread, window)
-    corr = rolling_corr(base_a, base_b, window)
+    # -------- Adaptive Rolling Window --------
+    effective_window = min(window, max(5, len(spread) // 2))
 
-    # ---------------- Status Banner ----------------
+    z = zscore(spread, effective_window)
+    corr = rolling_corr(base_a, base_b, effective_window)
+
+    # -------- Status Banner --------
     st.info(
-        f"**Mode:** {'Returns-based' if use_returns else 'Price-based'}  |  "
+        f"**Timeframe:** {timeframe}  |  "
+        f"**Mode:** {'Returns' if use_returns else 'Prices'}  |  "
         f"**Hedge Method:** {mode.upper()}  |  "
-        f"**Observations:** {len(spread)}"
+        f"**Data Points:** {len(spread)}"
     )
 
-    # ---------------- Metrics ----------------
+    if len(spread) < 5:
+        st.warning(
+            "Very few data points at this timeframe. "
+            "Rolling analytics may be unavailable."
+        )
+
+    # -------- Metrics --------
     st.markdown("### 📌 Key Metrics")
     m1, m2, m3 = st.columns(3)
-    m1.metric("Hedge Ratio (β)", f"{beta:.4f}")
+    m1.metric("Hedge Ratio (β)", f"{beta:.4f}" if pd.notna(beta) else "N/A")
     m2.metric("Spread Mean", f"{spread.mean():.6f}")
     m3.metric("Spread Std Dev", f"{spread.std():.6f}")
 
-    # ---------------- Alerts ----------------
-    if check_alert(z, threshold):
+    # -------- Alerts --------
+    if not z.dropna().empty and check_alert(z, threshold):
         st.error("🚨 Z-score breach detected — potential trading signal")
     else:
         st.success("✅ Z-score within statistical bounds")
 
-    # ---------------- Tabs ----------------
+    # -------- Tabs --------
     tabs = st.tabs([
         "📈 Prices",
         "📉 Returns",
@@ -135,6 +150,7 @@ if file:
         "💰 Backtest"
     ])
 
+    # -------- Prices --------
     with tabs[0]:
         st.plotly_chart(
             px.line(
@@ -144,6 +160,7 @@ if file:
             use_container_width=True
         )
 
+    # -------- Returns --------
     with tabs[1]:
         if use_returns:
             st.plotly_chart(
@@ -151,36 +168,51 @@ if file:
                 use_container_width=True
             )
         else:
-            st.info("Returns unavailable due to low variance in price data.")
+            st.info("Returns unavailable at this timeframe.")
 
+    # -------- Spread --------
     with tabs[2]:
         st.plotly_chart(
             px.line(spread, title="Spread"),
             use_container_width=True
         )
 
+    # -------- Z-Score --------
     with tabs[3]:
-        st.plotly_chart(
-            px.line(z, title="Rolling Z-Score"),
-            use_container_width=True
-        )
+        if z.dropna().empty:
+            st.info("Not enough data points to compute Z-score.")
+        else:
+            st.plotly_chart(
+                px.line(z, title="Rolling Z-Score"),
+                use_container_width=True
+            )
 
+    # -------- Correlation --------
     with tabs[4]:
-        st.plotly_chart(
-            px.line(corr, title="Rolling Correlation"),
-            use_container_width=True
-        )
+        if corr.dropna().empty:
+            st.info("Not enough data points to compute correlation.")
+        else:
+            st.plotly_chart(
+                px.line(corr, title="Rolling Correlation"),
+                use_container_width=True
+            )
 
+    # -------- ADF Test --------
     with tabs[5]:
-        st.markdown("### 🧪 Stationarity Test (ADF)")
-        if st.button("Run ADF Test"):
-            st.json(adf_test(spread))
+        if spread.dropna().shape[0] < 10:
+            st.info("Insufficient data for ADF test.")
+        else:
+            if st.button("Run ADF Test"):
+                st.json(adf_test(spread))
 
+    # -------- Backtest --------
     with tabs[6]:
-        pos = mean_reversion_backtest(z)
-        pnl = (pos.shift(1) * spread).cumsum()
-
-        st.plotly_chart(
-            px.line(pnl, title="Cumulative Strategy PnL"),
-            use_container_width=True
-        )
+        if z.dropna().empty:
+            st.info("Not enough data points to run backtest.")
+        else:
+            pos = mean_reversion_backtest(z)
+            pnl = (pos.shift(1) * spread).cumsum()
+            st.plotly_chart(
+                px.line(pnl, title="Cumulative Strategy PnL"),
+                use_container_width=True
+            )
